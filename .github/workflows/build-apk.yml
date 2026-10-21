@@ -1,121 +1,85 @@
 name: Build Kotoba APK
 
 on:
-  workflow_dispatch:
+workflow_dispatch:
 
 permissions:
-  contents: read
+contents: read
 
 jobs:
-  build:
-    name: Build Android APK
-    runs-on: ubuntu-latest
+build:
+name: Build Kotoba Android APK
+runs-on: ubuntu-latest
 
-    steps:
-      - name: Download repository
-        uses: actions/checkout@v4
+steps:
+  - name: Checkout repository
+    uses: actions/checkout@v4
 
-      - name: Find and extract project ZIP
-        shell: bash
-        run: |
-          set -euo pipefail
+  - name: Extract V4 source
+    shell: bash
+    run: |
+      set -euo pipefail
 
-          ARCHIVE=""
+      ARCHIVE="kotoba-learn-russian-final-v4.zip"
 
-          for FILE in \
-            kotoba-learn-russian-fixed-v2.zip \
-            kotoba-learn-russian-fixed.zip \
-            kotoba-learn-russian-full.zip
-          do
-            if [ -f "$FILE" ]; then
-              ARCHIVE="$FILE"
-              break
-            fi
-          done
+      if [ ! -f "$ARCHIVE" ]; then
+        echo "::error::Archive $ARCHIVE not found in repository root."
+        exit 1
+      fi
 
-          if [ -z "$ARCHIVE" ]; then
-            echo "::error::ZIP archive not found in repository root."
-            echo "Upload the Kotoba project ZIP to the repository."
-            exit 1
-          fi
+      mkdir -p project
+      unzip -q "$ARCHIVE" -d project
 
-          echo "Using archive: $ARCHIVE"
+      SETTINGS="$(find project -type f -name settings.gradle -o -name settings.gradle.kts | head -n 1)"
 
-          mkdir -p project
-          unzip -q "$ARCHIVE" -d project
+      if [ -z "$SETTINGS" ]; then
+        echo "::error::Gradle settings file not found."
+        exit 1
+      fi
 
-          echo "Archive extracted successfully."
-          echo "Searching for Gradle wrapper..."
+      echo "Project settings: $SETTINGS"
 
-          find project -type f -name gradlew -print
+  - name: Set up Java
+    uses: actions/setup-java@v4
+    with:
+      distribution: temurin
+      java-version: '17'
 
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
+  - name: Locate Android project
+    id: locate
+    shell: bash
+    run: |
+      set -euo pipefail
 
-      - name: Locate Android project
-        id: locate
-        shell: bash
-        run: |
-          set -euo pipefail
+      SETTINGS="$(find project -type f -name settings.gradle -o -name settings.gradle.kts | head -n 1)"
+      PROJECT_DIR="$(dirname "$SETTINGS")"
 
-          WRAPPER="$(find project -type f -name gradlew | head -n 1)"
+      echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
-          if [ -z "$WRAPPER" ]; then
-            echo "::error::Gradle wrapper gradlew was not found."
-            exit 1
-          fi
+      echo "Files in project:"
+      ls -la "$PROJECT_DIR"
 
-          PROJECT_DIR="$(dirname "$WRAPPER")"
+  - name: Build debug APK
+    shell: bash
+    env:
+      PROJECT_DIR: ${{ steps.locate.outputs.project_dir }}
+    run: |
+      set -euo pipefail
 
-          if [ ! -f "$PROJECT_DIR/settings.gradle" ] && \
-             [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
-            echo "::error::Gradle settings file was not found."
-            exit 1
-          fi
+      cd "$PROJECT_DIR"
 
-          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-          echo "Android project: $PROJECT_DIR"
+      if [ ! -f gradlew ]; then
+        echo "::error::Gradle wrapper not found."
+        exit 1
+      fi
 
-      - name: Build debug APK
-        shell: bash
-        env:
-          PROJECT_DIR: ${{ steps.locate.outputs.project_dir }}
-        run: |
-          set -euo pipefail
+      chmod +x gradlew
+      ./gradlew --no-daemon assembleDebug
 
-          cd "$PROJECT_DIR"
-          chmod +x gradlew
-
-          ./gradlew --no-daemon assembleDebug
-
-      - name: Find generated APK
-        id: apk
-        shell: bash
-        env:
-          PROJECT_DIR: ${{ steps.locate.outputs.project_dir }}
-        run: |
-          set -euo pipefail
-
-          APK="$(find "$PROJECT_DIR" \
-            -type f \
-            -path '*/build/outputs/apk/*/*.apk' \
-            | head -n 1)"
-
-          if [ -z "$APK" ]; then
-            echo "::error::APK was not generated."
-            exit 1
-          fi
-
-          echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
-          echo "APK generated: $APK"
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: kotoba-debug-apk
-          path: ${{ steps.apk.outputs.apk_path }}
-          if-no-files-found: error
-          retention-days: 30
+  - name: Upload APK
+    uses: actions/upload-artifact@v4
+    with:
+      name: kotoba-debug-apk
+      path: project/**/build/outputs/apk/debug/*.apk
+      if-no-files-found: error
+      retention-days: 30
