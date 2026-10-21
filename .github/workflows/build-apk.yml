@@ -1,85 +1,68 @@
 name: Build Kotoba APK
 
-on:
-workflow_dispatch:
+on: [workflow_dispatch]
 
 permissions:
-contents: read
+  contents: read
 
 jobs:
-build:
-name: Build Kotoba Android APK
-runs-on: ubuntu-latest
+  build:
+    name: Build Android APK
+    runs-on: ubuntu-latest
 
-steps:
-  - name: Checkout repository
-    uses: actions/checkout@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-  - name: Extract V4 source
-    shell: bash
-    run: |
-      set -euo pipefail
+      - name: Extract source archive
+        shell: bash
+        run: |
+          set -eu
+          ARCHIVE="kotoba-learn-russian-final-v4.zip"
+          if [ ! -f "$ARCHIVE" ]; then
+            echo "ERROR: Archive not found: $ARCHIVE"
+            exit 1
+          fi
+          mkdir -p project
+          unzip -q "$ARCHIVE" -d project
 
-      ARCHIVE="kotoba-learn-russian-final-v4.zip"
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
 
-      if [ ! -f "$ARCHIVE" ]; then
-        echo "::error::Archive $ARCHIVE not found in repository root."
-        exit 1
-      fi
+      - name: Locate Gradle project
+        id: locate
+        shell: bash
+        run: |
+          set -eu
+          SETTINGS="$(find project -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)"
+          if [ -z "$SETTINGS" ]; then
+            echo "ERROR: Gradle settings file not found"
+            exit 1
+          fi
+          PROJECT_DIR="$(dirname "$SETTINGS")"
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
-      mkdir -p project
-      unzip -q "$ARCHIVE" -d project
+      - name: Build APK
+        shell: bash
+        env:
+          PROJECT_DIR: ${{ steps.locate.outputs.project_dir }}
+        run: |
+          set -eu
+          cd "$PROJECT_DIR"
+          if [ ! -f gradlew ]; then
+            echo "ERROR: Gradle wrapper not found"
+            exit 1
+          fi
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleDebug
 
-      SETTINGS="$(find project -type f -name settings.gradle -o -name settings.gradle.kts | head -n 1)"
-
-      if [ -z "$SETTINGS" ]; then
-        echo "::error::Gradle settings file not found."
-        exit 1
-      fi
-
-      echo "Project settings: $SETTINGS"
-
-  - name: Set up Java
-    uses: actions/setup-java@v4
-    with:
-      distribution: temurin
-      java-version: '17'
-
-  - name: Locate Android project
-    id: locate
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      SETTINGS="$(find project -type f -name settings.gradle -o -name settings.gradle.kts | head -n 1)"
-      PROJECT_DIR="$(dirname "$SETTINGS")"
-
-      echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-
-      echo "Files in project:"
-      ls -la "$PROJECT_DIR"
-
-  - name: Build debug APK
-    shell: bash
-    env:
-      PROJECT_DIR: ${{ steps.locate.outputs.project_dir }}
-    run: |
-      set -euo pipefail
-
-      cd "$PROJECT_DIR"
-
-      if [ ! -f gradlew ]; then
-        echo "::error::Gradle wrapper not found."
-        exit 1
-      fi
-
-      chmod +x gradlew
-      ./gradlew --no-daemon assembleDebug
-
-  - name: Upload APK
-    uses: actions/upload-artifact@v4
-    with:
-      name: kotoba-debug-apk
-      path: project/**/build/outputs/apk/debug/*.apk
-      if-no-files-found: error
-      retention-days: 30
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: kotoba-debug-apk
+          path: project/**/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 30
